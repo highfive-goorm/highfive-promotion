@@ -1,26 +1,19 @@
-from typing import List, Literal, Optional
-from pydantic import BaseModel
 from datetime import datetime
+from pydantic import BaseModel
+from typing import Optional
 
+class PromotionBase(BaseModel):
+    img_url: str
+    start_time: int   # ms timestamp (epoch millis)
+    end_time: int     # ms timestamp
 
-class OrderItem(BaseModel):
-    id: int
-    quantity: int
-    price: int
-
-
-class OrderBase(BaseModel):
-    user_id: int
-    status: Literal["payed", "shipping", "shipped", "completed"]
-    order_items: List[OrderItem]
-    total_price: int
-
-
-class OrderCreate(OrderBase):
+class PromotionCreate(PromotionBase):
     pass
 
+class PromotionUpdate(BaseModel):
+    img_url: Optional[str]
+    start_time: Optional[int]
+    end_time: Optional[int]
 
-class OrderInDB(OrderBase):
+class PromotionInDB(PromotionBase):
     id: int
-    created_at: datetime
-    updated_at: datetime
