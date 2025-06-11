@@ -1,7 +1,5 @@
-fastapi
-uvicorn[standard] # 개발용 서버
-motor # 비동기 MongoDB 드라이버
-pydantic[email] # HttpUrl 등 사용 시 필요
-python-dotenv # .env 파일 로드용
-httpx # 비동기 HTTP 클라이언트
-bson # ObjectId 사용 시 (motor가 의존성으로 가질 수 있음, 명시적으로 추가)
+fastapi==0.111.0
+motor==3.7.0
+pydantic==2.11.4
+python-dotenv==1.1.0
+uvicorn==0.34.2

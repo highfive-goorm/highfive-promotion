@@ -1,86 +1,52 @@
-from motor.motor_asyncio import AsyncIOMotorCollection
-from bson import ObjectId # MongoDB의 ObjectId 사용 시
-from datetime import datetime, timezone
-from typing import List, Optional
+from bson import ObjectId
+from datetime import datetime
+from typing import List
 
-from .database import get_promotion_collection, ADVERTISEMENT_COLLECTION
-from .schemas import AdvertisementCreate, AdvertisementUpdate, AdvertisementResponse
+from .database import db
+from .schemas import PromotionCreate, PromotionUpdate
 
-# --- Helper function to convert MongoDB doc to Pydantic model ---
-# Pydantic v2 에서는 AdvertisementResponse.model_validate(doc) 로 더 간단하게 가능
-def advertisement_helper(advertisement_doc) -> dict:
-    # ObjectId를 문자열로 변환
-    if "_id" in advertisement_doc and isinstance(advertisement_doc["_id"], ObjectId):
-        advertisement_doc["_id"] = str(advertisement_doc["_id"])
+promotion_collection = db["promotion"]
 
-    # 모든 datetime 필드를 UTC로 가정하거나, timezone 정보가 없다면 추가
-    for key, value in advertisement_doc.items():
-        if isinstance(value, datetime) and value.tzinfo is None:
-            advertisement_doc[key] = value.replace(tzinfo=timezone.utc)
-    return advertisement_doc
+# --- 비동기 Promotion CRUD ---
 
+async def create_promotion(promotion: PromotionCreate) -> dict:
+    promotion_data = promotion.dict()
+    now = datetime.utcnow()
+    promotion_data["created_at"] = now
+    promotion_data["updated_at"] = now
+    result = await promotion_collection.insert_one(promotion_data)
+    created_promotion = await promotion_collection.find_one({"_id": result.inserted_id})
+    return created_promotion
 
-# --- 광고 CRUD 함수 ---
-async def create_advertisement(ad_data: AdvertisementCreate) -> dict:
-    collection: AsyncIOMotorCollection = get_promotion_collection(ADVERTISEMENT_COLLECTION)
-    ad_dict = ad_data.model_dump(exclude_unset=True)
-    now = datetime.now(timezone.utc)
-    ad_dict["created_at"] = now
-    ad_dict["updated_at"] = now
-    # 만약 관리용 숫자 ID를 자동 증가 등으로 생성한다면 여기서 로직 추가
-    # 예: counter 컬렉션을 사용하거나, 마지막 ID 조회 후 +1
+async def get_promotion(promotion_id: str) -> dict:
+    promotion = await promotion_collection.find_one({"_id": ObjectId(promotion_id)})
+    return promotion
 
-    result = await collection.insert_one(ad_dict)
-    created_ad = await collection.find_one({"_id": result.inserted_id})
-    return advertisement_helper(created_ad) if created_ad else None
-
-async def get_advertisement_by_id(ad_mongo_id: str) -> Optional[dict]:
-    collection: AsyncIOMotorCollection = get_promotion_collection(ADVERTISEMENT_COLLECTION)
-    try:
-        obj_id = ObjectId(ad_mongo_id) # 문자열 ID를 ObjectId로 변환
-    except Exception:
-        return None # 유효하지 않은 ObjectId 형식
-    ad = await collection.find_one({"_id": obj_id})
-    return advertisement_helper(ad) if ad else None
-
-async def get_active_advertisements(limit: int = 10, skip: int = 0) -> List[dict]:
-    collection: AsyncIOMotorCollection = get_promotion_collection(ADVERTISEMENT_COLLECTION)
-    now = datetime.now(timezone.utc)
+async def get_active_promotions(skip: int = 0, limit: int = 10) -> List[dict]:
+    now = datetime.utcnow()
     query = {
         "is_active": True,
-        "start_time": {"$lte": now},
-        "end_time": {"$gte": now}
+        "start_date": {"$lte": now},
+        "$or": [
+            {"end_date": None},
+            {"end_date": {"$gte": now}}
+        ]
     }
-    ads_cursor = collection.find(query).sort("created_at", -1).skip(skip).limit(limit)
-    active_ads = []
-    async for ad_doc in ads_cursor:
-        active_ads.append(advertisement_helper(ad_doc))
-    return active_ads
+    cursor = promotion_collection.find(query).skip(skip).limit(limit)
+    promotions = await cursor.to_list(length=limit)
+    return promotions
 
-async def update_advertisement(ad_mongo_id: str, ad_data: AdvertisementUpdate) -> Optional[dict]:
-    collection: AsyncIOMotorCollection = get_promotion_collection(ADVERTISEMENT_COLLECTION)
-    try:
-        obj_id = ObjectId(ad_mongo_id)
-    except Exception:
-        return None
+async def update_promotion(promotion_id: str, promotion_update: PromotionUpdate) -> dict:
+    update_data = promotion_update.dict(exclude_unset=True)
+    if update_data:
+        update_data["updated_at"] = datetime.utcnow()
+        await promotion_collection.update_one(
+            {"_id": ObjectId(promotion_id)}, {"$set": update_data}
+        )
+    updated_promotion = await get_promotion(promotion_id)
+    return updated_promotion
 
-    update_data = ad_data.model_dump(exclude_unset=True) # 업데이트할 필드만 포함
-    if not update_data:
-        return await get_advertisement_by_id(ad_mongo_id) # 변경사항 없으면 현재 데이터 반환
-
-    update_data["updated_at"] = datetime.now(timezone.utc)
-
-    result = await collection.update_one({"_id": obj_id}, {"$set": update_data})
-    if result.matched_count > 0:
-        updated_ad = await collection.find_one({"_id": obj_id})
-        return advertisement_helper(updated_ad) if updated_ad else None
-    return None
-
-async def delete_advertisement(ad_mongo_id: str) -> bool:
-    collection: AsyncIOMotorCollection = get_promotion_collection(ADVERTISEMENT_COLLECTION)
-    try:
-        obj_id = ObjectId(ad_mongo_id)
-    except Exception:
-        return False
-    result = await collection.delete_one({"_id": obj_id})
+async def delete_promotion(promotion_id: str) -> bool:
+    """프로모션을 삭제하고 성공 여부를 bool 값으로 반환합니다."""
+    result = await promotion_collection.delete_one({"_id": ObjectId(promotion_id)})
     return result.deleted_count > 0

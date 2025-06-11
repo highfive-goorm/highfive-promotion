@@ -1,68 +1,72 @@
-from pydantic import BaseModel, Field, HttpUrl
-from typing import Optional, List, Any
+from pydantic import BaseModel, Field, ConfigDict
+from typing import Optional, List
 from datetime import datetime
+from bson import ObjectId
+from pydantic_core import core_schema
+from pydantic.json_schema import JsonSchemaValue
 
-# --- 광고 기본 정보 ---
-class AdvertisementBase(BaseModel):
-    # id: int = Field(..., description="광고 고유 ID, 관리자가 직접 입력하거나 자동 생성") # 주석처리: MongoDB의 _id를 사용하고, 자동생성 ID는 선택사항
-    title: str = Field(..., min_length=1, description="광고 제목")
-    img_url: HttpUrl = Field(..., description="광고 이미지 URL")
-    description: Optional[str] = Field(None, description="광고 설명")
-    start_time: datetime = Field(..., description="광고 시작 시간 (UTC 권장)")
-    end_time: datetime = Field(..., description="광고 종료 시간 (UTC 권장)")
-    target_product_ids: List[int] = Field(default_factory=list, description="광고 클릭 시 연결될 상품 ID 목록")
-    landing_url: Optional[HttpUrl] = Field(None, description="광고 클릭 시 이동할 외부 URL (상품 목록 대신 사용 시)")
-    is_active: bool = Field(True, description="광고 활성화 여부 (관리자 제어)")
-    # 추가 메타데이터 (예: 광고주 정보, 광고 타입 등)
-    metadata: Optional[dict[str, Any]] = Field(None, description="추가 메타데이터")
+# Pydantic이 ObjectId를 이해할 수 있도록 만드는 헬퍼 클래스
+class PyObjectId(ObjectId):
+    @classmethod
+    def validate(cls, v):
+        """Validate that the input is a valid ObjectId."""
+        if not ObjectId.is_valid(v):
+            raise ValueError(f"'{v}' is not a valid ObjectId.")
+        return ObjectId(v)
 
-# --- 광고 생성 시 요청 스키마 ---
-class AdvertisementCreate(AdvertisementBase):
-    # 생성 시에는 id를 클라이언트가 보내지 않음 (또는 특정 규칙에 따라 생성)
-    # id 필드를 직접 관리할 경우 여기에 추가
-    # 예: id: int
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source_type, handler):
+        """
+        Return a Pydantic CoreSchema that defines how to validate and serialize ObjectIds.
+        Input can be a string or an ObjectId. Output during serialization is a string.
+        """
+        return core_schema.no_info_plain_validator_function(
+            cls.validate,
+            serialization=core_schema.to_string_ser_schema(),
+        )
+
+    @classmethod
+    def __get_pydantic_json_schema__(cls, core_schema_obj: core_schema.CoreSchema, handler) -> JsonSchemaValue:
+        """
+        Return a JSON schema representation for ObjectId, which is a string.
+        """
+        # For ObjectId, we simply want to represent it as a string in the OpenAPI schema.
+        # 'format: objectid' is a common convention but optional.
+        return {'type': 'string', 'format': 'objectid'}
+
+
+# --- Promotion Schemas ---
+
+class PromotionBase(BaseModel):
+    title: str = Field(..., example="나이키 특별 할인")
+    description: Optional[str] = Field(None, example="최대 30% 할인!")
+    brand_id: int = Field(..., example=101)
+    banner_image_url: str = Field(..., example="https://example.com/banner.jpg")
+    destination_url: str = Field(..., validation_alias='landing_url', example="/brands/101/new-destination")
+    is_active: bool = Field(True, example=True)
+    start_date: Optional[datetime] = Field(default_factory=datetime.utcnow)
+    end_date: Optional[datetime] = None
+
+class PromotionCreate(PromotionBase):
     pass
 
-# --- 광고 수정 시 요청 스키마 ---
-class AdvertisementUpdate(BaseModel):
-    title: Optional[str] = None
-    img_url: Optional[HttpUrl] = None
-    description: Optional[str] = None
-    start_time: Optional[datetime] = None
-    end_time: Optional[datetime] = None
-    target_product_ids: Optional[List[int]] = None
-    landing_url: Optional[HttpUrl] = None
-    is_active: Optional[bool] = None
-    metadata: Optional[dict[str, Any]] = None
+class PromotionUpdate(BaseModel):
+    title: Optional[str]
+    description: Optional[str]
+    brand_id: Optional[int]
+    banner_image_url: Optional[str]
+    destination_url: Optional[str]
+    is_active: Optional[bool]
+    start_date: Optional[datetime]
+    end_date: Optional[datetime]
 
-# --- 광고 응답 스키마 (DB에서 읽어온 후) ---
-class AdvertisementResponse(AdvertisementBase):
-    # MongoDB의 _id를 문자열로 변환하여 사용 (Pydantic v2에서는 model_dump(by_alias=True) 등 활용)
-    # 여기서는 간단하게 id 필드를 추가하고, CRUD에서 매핑한다고 가정
-    # 또는 실제로는 MongoDB _id를 ObjectId 타입 그대로 사용하거나, 문자열로 변환해서 사용
-    mongo_id: str = Field(alias="_id", description="MongoDB 문서 ID") # Pydantic v1 스타일 alias
-    id: Optional[int] = Field(None, description="광고 관리용 숫자 ID (선택적)")
-    created_at: datetime
-    updated_at: datetime
+# DB에서 조회한 데이터를 담는 스키마 (API 응답용)
+class PromotionInDB(PromotionBase):
+    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
 
-    class Config:
-        orm_mode = True # 이제 Pydantic v2에서는 model_validate(from_attributes=True)
-        allow_population_by_field_name = True # _id <-> mongo_id
-        json_encoders = {
-            datetime: lambda dt: dt.isoformat()
-        }
-
-# --- 상품 정보 스키마 (Product Service에서 받아올 데이터 형태 - 예시) ---
-class ProductSchema(BaseModel):
-    id: int
-    name: str
-    img_url: Optional[HttpUrl] = None
-    price: float
-    # ... 기타 필요한 상품 정보
-
-# --- 광고 클릭 시 로깅 서비스로 보낼 데이터 스키마 ---
-class AdClickLogData(BaseModel):
-    advertisement_id: str # 광고의 mongo_id 또는 관리용 id
-    user_id: Optional[str] = None
-    session_id: Optional[str] = None
-    # ... 기타 필요한 정보
+    model_config = ConfigDict(
+        populate_by_name=True,  # Pydantic V2 style for allowing population by field name (alias)
+        json_encoders={ObjectId: str} # Keep for other potential ObjectId fields if any
+    )
